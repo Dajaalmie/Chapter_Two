@@ -139,6 +139,105 @@ if "combined_context" not in st.session_state:
     st.session_state.combined_context = ""
 if "last_answer" not in st.session_state:
     st.session_state.last_answer = ""
+if "saved_histories" not in st.session_state:
+    st.session_state.saved_histories = []
+
+# =========================
+# HISTORY MANAGEMENT
+# =========================
+import json
+from datetime import datetime
+
+def save_chat_history(history_name: str) -> bool:
+    """Save current chat history, documents, and search results"""
+    try:
+        history_data = {
+            "name": history_name,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "messages": st.session_state.messages,
+            "documents": st.session_state.documents,
+            "paper_search_results": st.session_state.paper_search_results,
+            "combined_context": st.session_state.combined_context
+        }
+        
+        # Save to file
+        filename = f"chat_history_{history_name.replace(' ', '_').lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = os.path.join("histories", filename)
+        
+        # Create histories directory if it doesn't exist
+        os.makedirs("histories", exist_ok=True)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(history_data, f, ensure_ascii=False, indent=2)
+        
+        # Add to session state
+        st.session_state.saved_histories.append({
+            "name": history_name,
+            "filename": filename,
+            "timestamp": history_data["timestamp"],
+            "filepath": filepath
+        })
+        
+        return True
+    except Exception as e:
+        st.error(f"Failed to save history: {e}")
+        return False
+
+def load_chat_history(filepath: str) -> bool:
+    """Load a saved chat history"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            history_data = json.load(f)
+        
+        # Restore session state
+        st.session_state.messages = history_data.get("messages", [])
+        st.session_state.documents = history_data.get("documents", [])
+        st.session_state.paper_search_results = history_data.get("paper_search_results", [])
+        st.session_state.combined_context = history_data.get("combined_context", "")
+        
+        return True
+    except Exception as e:
+        st.error(f"Failed to load history: {e}")
+        return False
+
+def get_saved_histories() -> List[Dict]:
+    """Get list of all saved histories"""
+    histories = []
+    try:
+        if os.path.exists("histories"):
+            for filename in os.listdir("histories"):
+                if filename.endswith(".json"):
+                    filepath = os.path.join("histories", filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        histories.append({
+                            "name": data.get("name", filename),
+                            "filename": filename,
+                            "timestamp": data.get("timestamp", ""),
+                            "filepath": filepath
+                        })
+                    except:
+                        continue
+    except Exception as e:
+        st.error(f"Error loading histories: {e}")
+    
+    return sorted(histories, key=lambda x: x["timestamp"], reverse=True)
+
+def delete_chat_history(filepath: str) -> bool:
+    """Delete a saved chat history"""
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            # Remove from session state
+            st.session_state.saved_histories = [
+                h for h in st.session_state.saved_histories 
+                if h["filepath"] != filepath
+            ]
+            return True
+    except Exception as e:
+        st.error(f"Failed to delete history: {e}")
+    return False
 
 # =========================
 # HELPERS
@@ -679,6 +778,48 @@ if st.sidebar.button("🗑️ Clear All Documents"):
     st.session_state.paper_search_results = []
     st.session_state.combined_context = ""
     st.rerun()
+
+# =========================
+# HISTORY MANAGEMENT
+# =========================
+st.sidebar.markdown("---")
+st.sidebar.subheader("📚 Chat History")
+
+# Save current history
+history_name = st.sidebar.text_input("History name", placeholder="e.g., Research on Education")
+if st.sidebar.button("💾 Save Current Chat"):
+    if not history_name.strip():
+        st.sidebar.warning("Please enter a history name.")
+    elif not st.session_state.messages:
+        st.sidebar.warning("No messages to save.")
+    else:
+        if save_chat_history(history_name.strip()):
+            st.sidebar.success(f"History '{history_name}' saved successfully!")
+        else:
+            st.sidebar.error("Failed to save history.")
+
+# Load saved histories
+st.sidebar.markdown("**Saved Histories:**")
+saved_histories = get_saved_histories()
+
+if saved_histories:
+    for history in saved_histories[:5]:  # Show last 5 histories
+        col1, col2, col3 = st.sidebar.columns([3, 1, 1])
+        with col1:
+            st.sidebar.write(f"📄 {history['name']}")
+            st.sidebar.caption(f"📅 {history['timestamp']}")
+        with col2:
+            if st.sidebar.button("📂", key=f"load_{history['filepath']}"):
+                if load_chat_history(history['filepath']):
+                    st.sidebar.success(f"Loaded '{history['name']}'")
+                    st.rerun()
+        with col3:
+            if st.sidebar.button("🗑️", key=f"del_{history['filepath']}"):
+                if delete_chat_history(history['filepath']):
+                    st.sidebar.success(f"Deleted '{history['name']}'")
+                    st.rerun()
+else:
+    st.sidebar.caption("No saved histories yet.")
 
 # =========================
 # HEADER
