@@ -71,9 +71,9 @@ APP_SUBTITLE = "Upload papers, search many papers, add links, and chat with disc
 DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_MIN_YEAR = 2018
 DEFAULT_MAX_YEAR = 2025
-TARGET_PARAGRAPH_LINES = 9
+TARGET_PARAGRAPH_LINES = 8
 MIN_PARAGRAPH_LINES = 6
-MAX_PARAGRAPH_LINES = 9
+MAX_PARAGRAPH_LINES = 10
 MAX_CONTEXT_CHARS = 140000
 
 DEFAULT_SYSTEM_PROMPT = """
@@ -82,40 +82,45 @@ You are a research assistant specializing in academic writing with APA 7th editi
 RESPONSE FORMAT:
 1. Write in clear academic prose as a narrative essay
 2. Use proper APA 7th edition in-text citations (Author, Year) naturally
-3. Provide a "References" section at the end with proper APA 7th edition formatting
-4. NO subheadings, NO bullet points - write as continuous narrative
+3. Provide a "References" section at end with proper APA 7th edition formatting
+4. Use subheadings to structure content when appropriate
 
 CITATION RULES:
 - ONLY use citations from uploaded documents and searched papers provided below
+- ONLY use real author names from the actual sources - NEVER use placeholders like "A.A.A", "VAT", "Nigeria" as authors
 - Use (Author, Year) format for in-text citations
 - For multiple authors: (Smith & Johnson, 2023) for 2 authors, (Smith et al., 2023) for 3+ authors
 - If no author: (Organization, Year) or ("Title of Work", Year)
 - Place citations naturally where they make sense, not forced
 - Add 1-2 citations in introduction if relevant
+- Include exactly 3 citations per paragraph (unless user specifically asks for "4 scholars definition")
 - NEVER invent citations or use sources not provided
+- NEVER use placeholder or fake author names
 
-WRITING STYLE:
+PARAGRAPH RULES:
+- Maximum 10 lines per paragraph
+- Each paragraph must contain exactly 3 citations (unless asking for 4 scholars definition)
 - Write as continuous narrative paragraphs
-- Use complete words: write "bullying" instead of "bully", "trustworthiness" instead of "truacy"
-- NO abbreviations like "vat" - write "value-added tax" or full terms
-- NO subheadings like "Introduction" - just write the content
-- NO bullet points or numbered lists
 - Professional academic tone throughout
 
 CONTENT RULES:
 1. Answer from the supplied paper context first
 2. Use uploaded documents for detailed content (full text available)
 3. Use searched papers for metadata-based answers (title, authors, journal, year)
-4. If information isn't in the provided sources, say so clearly
+4. If information isn't in the provided sources, improvise based on general academic knowledge while maintaining academic tone
 5. Be clear, accurate, and academic in tone
 6. Structure answers logically with proper flow
+7. When improvising, provide answer directly without explaining that it's based on general knowledge
+8. If user asks about previous answers, respond directly without rewriting or re-explaining the same content
+9. Reference previous responses concisely when questioned about them
 
 REFERENCES SECTION:
-- List all cited sources in proper APA 7th edition format
+- List ONLY sources that were actually cited in the text
 - For uploaded documents: Use filename as title if no clear author
 - For searched papers: Use available metadata (authors, year, title, journal)
 - Format: Author, A. A. (Year). Title of work. Journal Name, volume(issue), pages. OR DOI
-- Only include sources that were actually cited in the text
+- NEVER include references that were not cited in the text
+- NEVER include placeholder or fake references
 """
 
 USER_AGENT = {
@@ -285,10 +290,27 @@ def surname_from_name(name: str) -> str:
 def build_citation_label(title: str = "", authors: Optional[List[str]] = None, year: str = "") -> str:
     authors = authors or []
     if authors:
-        surname = surname_from_name(authors[0])
-    else:
-        surname = surname_from_name(title or "Source")
-    return f"({surname}, {year or 'n.d.'})"
+        # Use first real author name, clean it properly
+        first_author = clean_text(authors[0])
+        # Remove common problematic patterns
+        if len(first_author) > 2 and not any(pattern in first_author.upper() for pattern in ['PHD', 'NIGERIA', 'VAT', 'PERSPECTIVE', 'FUT', 'PAR']):
+            surname = surname_from_name(first_author)
+            # Ensure surname is meaningful and not a problematic pattern
+            if len(surname) > 1 and surname.isalpha() and not any(pattern in surname.upper() for pattern in ['FUT', 'PAR', 'NIG', 'VAT']):
+                return f"({surname}, {year or 'n.d.'})"
+    
+    # Fallback to title if no valid author
+    if title:
+        # Extract meaningful words from title, avoid generic terms
+        title_words = [w for w in title.split() if len(w) > 2 and w.upper() not in ['EDUCATION', 'STUDY', 'RESEARCH', 'ANALYSIS', 'FUTURE', 'PERSPECTIVE']]
+        if title_words:
+            # Ensure title word is not problematic
+            first_word = title_words[0]
+            if len(first_word) > 2 and not any(pattern in first_word.upper() for pattern in ['FUT', 'PAR', 'NIG', 'VAT']):
+                return f"({first_word[:3].upper()}, {year or 'n.d.'})"
+    
+    # Final fallback with safe default
+    return f"(Source, {year or 'n.d.'})"
 
 
 def enrich_document_metadata(
@@ -682,7 +704,7 @@ def generate_answer(
     configure_gemini(api_key)
     model = genai.GenerativeModel(model_name)
 
-    recent_history = chat_history[-10:] if chat_history else []
+    recent_history = chat_history[-40:] if chat_history else []
     history_text = ""
     for msg in recent_history:
         history_text += f"{msg.get('role', 'user').upper()}: {msg.get('content', '')}\n"
@@ -709,15 +731,23 @@ IMPORTANT INSTRUCTIONS:
 2. For uploaded documents: you have full text content available
 3. For searched papers: you have metadata (title, authors, year, journal) and possibly abstract
 4. Include proper APA 7th edition in-text citations: (Author, Year) naturally
-5. End with a "References" section listing all cited sources in APA 7th edition format
+5. End with a "References" section listing ONLY sources actually cited in the text
 6. Format references as:
    - For uploaded docs: Author, A. A. (Year). Title of document. Retrieved from [source]
    - For searched papers: Author, A. A. (Year). Title of article. Journal Name, volume(issue), pages. https://doi.org/xxxx
 7. NEVER invent citations or use sources not provided
-8. If no information is available, say so clearly
+8. If information isn't in the provided sources, improvise based on general academic knowledge while maintaining academic tone
 9. Write as continuous narrative - NO subheadings, NO bullet points
-10. Use complete words: "bullying" not "bully", "trustworthiness" not "truacy", "value-added tax" not "vat"
-11. Place citations naturally where appropriate, not forced
+10. Use complete words: "bullying" instead of "bully", "trustworthiness" instead of "truacy"
+11. NO abbreviations like "vat" - write "value-added tax" or full terms
+12. Use subheadings when appropriate to structure content
+13. Professional academic tone throughout
+14. ONLY include references that were actually cited in the text
+15. NEVER use placeholder author names like "A.A.A", "VAT", "Nigeria" as authors
+16. When improvising, provide answer directly without explaining the knowledge source
+17. If user asks about previous answers, respond directly without rewriting or re-explaining the same content
+18. Reference previous responses concisely when questioned about them
+19. Always position your response at the bottom, not at the top
 """
 
     response = model.generate_content(prompt)
@@ -787,7 +817,7 @@ st.sidebar.subheader("📚 Chat History")
 
 # Save current history
 history_name = st.sidebar.text_input("History name", placeholder="e.g., Research on Education")
-if st.sidebar.button("💾 Save Current Chat"):
+if st.sidebar.button("💾 Save Current Chat", help="Save current chat history, documents, and search results"):
     if not history_name.strip():
         st.sidebar.warning("Please enter a history name.")
     elif not st.session_state.messages:
@@ -795,6 +825,7 @@ if st.sidebar.button("💾 Save Current Chat"):
     else:
         if save_chat_history(history_name.strip()):
             st.sidebar.success(f"History '{history_name}' saved successfully!")
+            st.rerun()
         else:
             st.sidebar.error("Failed to save history.")
 
@@ -803,23 +834,26 @@ st.sidebar.markdown("**Saved Histories:**")
 saved_histories = get_saved_histories()
 
 if saved_histories:
-    for history in saved_histories[:5]:  # Show last 5 histories
-        col1, col2, col3 = st.sidebar.columns([3, 1, 1])
-        with col1:
-            st.sidebar.write(f"📄 {history['name']}")
-            st.sidebar.caption(f"📅 {history['timestamp']}")
-        with col2:
-            if st.sidebar.button("📂", key=f"load_{history['filepath']}"):
-                if load_chat_history(history['filepath']):
-                    st.sidebar.success(f"Loaded '{history['name']}'")
-                    st.rerun()
-        with col3:
-            if st.sidebar.button("🗑️", key=f"del_{history['filepath']}"):
-                if delete_chat_history(history['filepath']):
-                    st.sidebar.success(f"Deleted '{history['name']}'")
-                    st.rerun()
+    # Show all histories with expandable sections
+    for history in saved_histories:
+        with st.sidebar.expander(f"📄 {history['name']} ({history['timestamp']})"):
+            col1, col2, col3 = st.sidebar.columns([2, 1, 1])
+            with col1:
+                st.sidebar.write(f"**{history['name']}**")
+                st.sidebar.caption(f"📅 {history['timestamp']}")
+            with col2:
+                if st.sidebar.button("📂 Load", key=f"load_{history['filepath']}", help="Load this chat history"):
+                    if load_chat_history(history['filepath']):
+                        st.sidebar.success(f"Loaded '{history['name']}'")
+                        st.rerun()
+            with col3:
+                if st.sidebar.button("🗑️ Delete", key=f"del_{history['filepath']}", help="Delete this chat history"):
+                    if delete_chat_history(history['filepath']):
+                        st.sidebar.success(f"Deleted '{history['name']}'")
+                        st.rerun()
 else:
     st.sidebar.caption("No saved histories yet.")
+    st.sidebar.info("💡 **Tip:** Save your chat history anytime to preserve your conversations, documents, and search results for future use.")
 
 # =========================
 # HEADER
@@ -882,6 +916,342 @@ with tab1:
                 st.markdown(f"**Detected authors:** {', '.join(doc.get('authors') or []) or 'Unknown'}")
                 preview = doc["text"][:2500] + ("..." if len(doc["text"]) > 2500 else "")
                 st.text_area("Preview", preview, height=220, key=f"preview_{i}")
+
+    st.markdown("---")
+    
+    # =========================
+    # REFERENCE COMPLETER
+    # =========================
+    st.subheader("� Complete Incomplete References")
+    
+    st.markdown("**Paste incomplete references below and the app will search for complete details:**")
+    
+    # Text area for incomplete references
+    incomplete_refs = st.text_area(
+        "Paste Incomplete References Here:",
+        height=200,
+        placeholder="Everest, N. C., Ngomba, J. L., & Ajibola, O. (2024). Effect of domestic violence against women on marital instability: A study of Jalingo Metropolis, Taraba State, Nigeria. Jalingo Journal of Social and Management Sciences.\n\nFederal Republic of Nigeria (FRN) (2014). National Policy on Education (NPE). Nigerian Educational Research and Development Council (NERDC).",
+        key="incomplete_refs"
+    )
+    
+    if st.button("🔍 Search for Complete References", type="primary"):
+        if incomplete_refs.strip():
+            with st.spinner("Searching for complete references..."):
+                # Split into individual references
+                ref_lines = [line.strip() for line in incomplete_refs.split('\n') if line.strip()]
+                
+                completed_refs = []
+                for ref in ref_lines:
+                    if ref:
+                        # Try to extract key information for search
+                        # Look for author names, years, titles
+                        import re
+                        
+                        # Extract authors (names before parentheses)
+                        author_match = re.search(r'([A-Z][a-z]+,?\s*[A-Z]\.?\s*[A-Z][a-z]+(?:,\s*et al\.)?', ref)
+                        if author_match:
+                            authors = author_match.group(1)
+                        else:
+                            # Look for any names in the reference
+                            name_words = re.findall(r'\b([A-Z][a-z]+)\b', ref)
+                            authors = ', '.join(name_words[:3]) if name_words else "Unknown"
+                        
+                        # Extract year
+                        year_match = re.search(r'\((\d{4})\)', ref)
+                        year = year_match.group(1) if year_match else ""
+                        
+                        # Extract title (between author and journal or after year)
+                        title_match = re.search(r'\)\s*\.?\s*(.*?)\.?\s*(?:[A-Z][a-z]+\s+[A-Z]\.|[A-Z]+\s*[A-Z][a-z]+:)', ref)
+                        title = title_match.group(1).strip() if title_match else ""
+                        
+                        if title and authors:
+                            # Search for complete reference
+                            search_query = f"{title} {authors} {year}"
+                            try:
+                                results = search_crossref_papers(search_query, rows=5, min_year=int(year)-2 if year else DEFAULT_MIN_YEAR, max_year=int(year)+2 if year else DEFAULT_MAX_YEAR)
+                                
+                                if results:
+                                    best_match = results[0]  # Use first result
+                                    completed_ref = f"{best_match['authors']} ({best_match['year']}). {best_match['title']}. {best_match['journal']}. https://doi.org/{best_match['doi']}" if best_match['doi'] else f"{best_match['authors']} ({best_match['year']}). {best_match['title']}. {best_match['journal']}."
+                                    completed_refs.append(f"✅ **Found:** {completed_ref}")
+                                else:
+                                    completed_refs.append(f"❌ **Not Found:** {ref}")
+                            except Exception as e:
+                                completed_refs.append(f"⚠️ **Error:** {ref} - {str(e)}")
+                        else:
+                            completed_refs.append(f"⚠️ **Could not parse:** {ref}")
+                
+                # Display results
+                if completed_refs:
+                    st.markdown("### 🔍 Search Results:")
+                    for result in completed_refs:
+                        st.markdown(result)
+                else:
+                    st.warning("No references found to process.")
+    
+    st.markdown("---")
+    
+    # =========================
+    # IMPORTS AND FUNCTIONS FOR REFERENCE GENERATION
+    # =========================
+    import re
+    from difflib import SequenceMatcher
+
+    def normalize_whitespace(text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "")).strip()
+
+    def safe_int_year(year_text: str):
+        if year_text and str(year_text).isdigit():
+            return int(year_text)
+        return None
+
+    def extract_citations_from_text(text: str) -> List[Dict[str, str]]:
+        text = text or ""
+        citations = []
+
+        patterns = [
+            # Narrative: Smith (2023), Smith and Jones (2022), Smith et al. (2021)
+            r"\b([A-Z][a-zA-Z'-]+(?:\s+(?:and|&)\s+[A-Z][a-zA-Z'-]+)?(?:\s+et al\.)?)\s*\((19|20)\d{2}\)",
+            # Parenthetical: (Smith, 2023), (Smith & Jones, 2022), (Smith et al., 2021)
+            r"\(([A-Z][a-zA-Z'-]+(?:\s+(?:and|&)\s+[A-Z][a-zA-Z'-]+)?(?:\s+et al\.)?),\s*((?:19|20)\d{2})\)",
+        ]
+
+        seen = set()
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                authors = normalize_whitespace(match.group(1))
+                year = normalize_whitespace(match.group(2))
+                key = (authors.lower(), year)
+                if key not in seen:
+                    seen.add(key)
+                    citations.append({"authors": authors, "year": year})
+
+        return citations
+
+    def normalize_title(title: str) -> str:
+        title = normalize_whitespace(title).lower()
+        title = re.sub(r"[^\w\s]", " ", title)
+        title = re.sub(r"\s+", " ", title).strip()
+        return title
+
+    def title_similarity(a: str, b: str) -> float:
+        return SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
+
+    def extract_surnames(author_text: str) -> List[str]:
+        author_text = normalize_whitespace(author_text)
+        if not author_text:
+            return []
+
+        # Handles "Smith", "Smith et al.", "Smith and Jones", "Smith, J."
+        tokens = re.findall(r"\b[A-Z][a-zA-Z'-]{2,}\b", author_text)
+        ignore = {
+            "The", "This", "That", "These", "Those", "Research", "Study", "Analysis",
+            "Educational", "Education", "Digital", "Learning", "Programs", "Program",
+            "School", "University", "Effect", "Impact", "Role", "Pattern", "Model"
+        }
+        return [t for t in tokens if t not in ignore]
+
+    def search_crossref_precise(
+        query: str,
+        rows: int = 15,
+        min_year: int = DEFAULT_MIN_YEAR,
+        max_year: int = DEFAULT_MAX_YEAR,
+    ) -> List[Dict]:
+        try:
+            url = "https://api.crossref.org/works"
+            params = {
+                "query.bibliographic": query,
+                "rows": rows,
+                "select": "title,URL,DOI,author,issued,container-title",
+            }
+            response = requests.get(url, params=params, headers=USER_AGENT, timeout=40)
+            response.raise_for_status()
+            data = response.json()
+
+            results: List[Dict] = []
+            for item in data.get("message", {}).get("items", []):
+                title = item.get("title", ["Untitled"])[0] if item.get("title") else "Untitled"
+                journal = item.get("container-title", [""])[0] if item.get("container-title") else ""
+                doi = item.get("DOI", "")
+                link = item.get("URL", "")
+                issued = item.get("issued", {})
+                date_parts = issued.get("date-parts", [])
+                year = ""
+
+                if date_parts and date_parts[0]:
+                    year = str(date_parts[0][0])
+
+                if not year or not str(year).isdigit():
+                    continue
+
+                year_int = int(year)
+                if not (min_year <= year_int <= max_year):
+                    continue
+
+                authors: List[str] = []
+                for author in item.get("author", []):
+                    given = author.get("given", "")
+                    family = author.get("family", "")
+                    name = normalize_whitespace(f"{given} {family}")
+                    if name:
+                        authors.append(name)
+
+                results.append(
+                    {
+                        "title": title,
+                        "journal": journal,
+                        "year": year,
+                        "doi": doi,
+                        "link": link,
+                        "authors": ", ".join(authors[:8]) if authors else "N/A",
+                        "authors_list": authors,
+                    }
+                )
+
+            return results
+        except Exception:
+            return []
+
+    def score_citation_match(result: Dict, citation: Dict[str, str]) -> float:
+        score = 0.0
+        wanted_year = str(citation.get("year", "")).strip()
+        wanted_authors = citation.get("authors", "")
+
+        result_year = str(result.get("year", "")).strip()
+        result_authors = result.get("authors", "")
+
+        wanted_surnames = {x.lower() for x in extract_surnames(wanted_authors)}
+        result_surnames = {x.lower() for x in extract_surnames(result_authors)}
+
+        if wanted_surnames and result_surnames:
+            overlap = len(wanted_surnames & result_surnames)
+            score += overlap * 20
+
+            # Strong bonus when first surname matches
+            wanted_first = next(iter(wanted_surnames), "")
+            if wanted_first and wanted_first in result_surnames:
+                score += 15
+
+        if wanted_year and result_year == wanted_year:
+            score += 25
+
+        return score
+
+    def format_apa_reference(item: Dict) -> str:
+        authors = item.get("authors", "N/A")
+        year = item.get("year", "n.d.")
+        title = item.get("title", "Untitled")
+        journal = normalize_whitespace(item.get("journal", ""))
+        doi = normalize_whitespace(item.get("doi", ""))
+        link = normalize_whitespace(item.get("link", ""))
+
+        if journal:
+            if doi:
+                return f"{authors} ({year}). {title}. *{journal}*. https://doi.org/{doi}"
+            if link:
+                return f"{authors} ({year}). {title}. *{journal}*. {link}"
+            return f"{authors} ({year}). {title}. *{journal}*."
+        else:
+            if doi:
+                return f"{authors} ({year}). *{title}*. https://doi.org/{doi}"
+            if link:
+                return f"{authors} ({year}). *{title}*. {link}"
+            return f"{authors} ({year}). *{title}*."
+
+    # =========================
+    # GENERATE REFERENCES FROM TEXT
+    # =========================
+    st.subheader("📝 Generate References from Text")
+    st.markdown("**Paste your text below and the app will find the most accurate references for in-text citations it detects:**")
+
+    user_text = st.text_area(
+        "Paste Your Text Here:",
+        height=220,
+        placeholder="Educational technology has transformed modern learning environments. Smith (2023) argued that successful technology integration depends on comprehensive planning. Johnson and Brown (2022) found that teacher training programs significantly impact adoption rates. Similar evidence was reported in recent studies (Williams, 2021).",
+        key="user_text"
+    )
+
+    if st.button("🔍 Generate References from Text", type="primary"):
+        if user_text.strip():
+            with st.spinner("Finding accurate references from text..."):
+                citations = extract_citations_from_text(user_text)
+
+                if citations:
+                    st.markdown(f"### Detected Citations ({len(citations)})")
+                    for c in citations:
+                        st.markdown(f"- {c['authors']} ({c['year']})")
+                else:
+                    st.warning("No in-text citations were detected.")
+                
+                final_refs = []
+                for citation in citations:
+                    year_val = safe_int_year(citation["year"])
+                    min_year = year_val - 2 if year_val else DEFAULT_MIN_YEAR
+                    max_year = year_val + 2 if year_val else DEFAULT_MAX_YEAR
+
+                    query = f"{citation['authors']} {citation['year']}"
+                    results = search_crossref_precise(
+                        query,
+                        rows=15,
+                        min_year=min_year,
+                        max_year=max_year,
+                    )
+
+                    if not results:
+                        final_refs.append(
+                            {
+                                "citation": f"{citation['authors']} ({citation['year']})",
+                                "status": "not_found",
+                                "message": "No accurate result found.",
+                            }
+                        )
+                        continue
+
+                    ranked = sorted(results, key=lambda r: score_citation_match(r, citation), reverse=True)
+                    best = ranked[0]
+                    best_score = score_citation_match(best, citation)
+
+                    # Quality gate for accuracy
+                    if best_score >= 35:
+                        final_refs.append(
+                            {
+                                "citation": f"{citation['authors']} ({citation['year']})",
+                                "status": "found",
+                                "reference": format_apa_reference(best),
+                            }
+                        )
+                    else:
+                        final_refs.append(
+                            {
+                                "citation": f"{citation['authors']} ({citation['year']})",
+                                "status": "not_found",
+                                "message": "No sufficiently accurate match found.",
+                            }
+                        )
+
+            st.markdown("### Results")
+            found_refs = [x["reference"] for x in final_refs if x["status"] == "found"]
+
+            if found_refs:
+                st.success(f"Found {len(found_refs)} accurate reference(s).")
+                st.text_area(
+                    "Generated References",
+                    value="\n\n".join(found_refs),
+                    height=260,
+                    key="generated_references_output",
+                )
+            else:
+                st.warning("No accurate references were found from the detected citations.")
+
+            for item in final_refs:
+                if item["status"] == "found":
+                    with st.expander(f"✅ {item['citation']}"):
+                        st.markdown(item["reference"])
+                else:
+                    with st.expander(f"❌ {item['citation']}"):
+                        st.markdown(item["message"])
+        else:
+            st.warning("Paste some text first.")
 
 # =========================
 # TAB 2
@@ -993,11 +1363,23 @@ with tab3:
             st.markdown("### Document Summary")
             st.write(summary)
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # Display messages - show user messages first, then assistant response at bottom
+    if st.session_state.messages:
+        # Separate user and assistant messages
+        user_messages = [msg for msg in st.session_state.messages if msg["role"] == "user"]
+        assistant_messages = [msg for msg in st.session_state.messages if msg["role"] == "assistant"]
+        
+        # Display user messages first
+        for msg in user_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+        
+        # Display assistant messages at bottom
+        for msg in assistant_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-    user_query = st.chat_input("Ask a question about your uploaded papers and searched papers")
+    user_query = st.chat_input("Ask a question about your uploaded papers and searched papers", key="chat_input")
 
     if user_query:
         st.session_state.messages.append({"role": "user", "content": user_query})
